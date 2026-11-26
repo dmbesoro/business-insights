@@ -1,0 +1,111 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: business_insights
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: local_dev_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d business_insights"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  localstack:
+    image: floci/floci:latest-compat
+    ports:
+      - "4566:4566"
+    environment:
+      FLOCI_HOSTNAME: localstack
+      FLOCI_STORAGE_MODE: hybrid
+      FLOCI_STORAGE_PERSISTENT_PATH: /var/lib/localstack
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./infra/localstack/init/ready.sh:/etc/localstack/init/ready.d/ready.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:local_dev_only@db:5432/business_insights
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      S3_BUCKET: business-insights
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/report-processing
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: /api
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  worker:
+    build:
+      context: ./backend
+    command: python -m app.worker.sqs_worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:local_dev_only@db:5432/business_insights
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      S3_BUCKET: business-insights
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/report-processing
+      MAX_UPLOAD_SIZE_MB: 20
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+      - localstack
+    restart: unless-stopped
+
+  dlq-worker:
+    build:
+      context: ./backend
+    command: python -m app.worker.dlq_worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:local_dev_only@db:5432/business_insights
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      S3_BUCKET: business-insights
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/report-processing
+      SQS_DLQ_URL: http://localstack:4566/000000000000/report-processing-dlq
+      MAX_UPLOAD_SIZE_MB: 20
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+      - localstack
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  localstack_data:

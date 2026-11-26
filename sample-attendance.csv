@@ -1,0 +1,5 @@
+employee_id,date,attendance_status,check_in,check_out
+EMP001,2026-11-25,Present,08:00,17:00
+EMP002,2026-11-25,Late,09:15,17:00
+EMP003,2026-11-25,Absent,,
+EMP004,2026-11-25,Half Day,08:00,12:00
